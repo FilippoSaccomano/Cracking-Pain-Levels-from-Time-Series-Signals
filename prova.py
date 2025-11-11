@@ -478,127 +478,295 @@ def run_experiment(smote_params, model_params, epochs=60, batch_size=32, return_
     return result
 
 # %%
-# %% ⚡ OPTIMIZED GRID SEARCH (parallel + filtered)
+# %% ⚡ ENSEMBLE GRID SEARCH (LSTM, GRU, CNN-LSTM)
 from itertools import product
 from joblib import Parallel, delayed
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers, models
 
-print("🚀 Starting optimized grid search...")
+print("🚀 Starting Ensemble Grid Search...")
 
-# -----------------------
-# 1. Define search space
-# -----------------------
+# =====================================================
+# 1. MODEL BUILDERS
+# =====================================================
+def build_lstm(sequence_length, n_features, n_classes, units=(128, 64), dropout=0.3):
+    model = keras.Sequential([
+        layers.Masking(mask_value=0.0, input_shape=(sequence_length, n_features)),
+        layers.LSTM(units[0], return_sequences=True),
+        layers.Dropout(dropout),
+        layers.LSTM(units[1]),
+        layers.Dropout(dropout),
+        layers.Dense(64, activation='relu'),
+        layers.Dense(n_classes, activation='softmax')
+    ])
+    return model
+
+def build_gru(sequence_length, n_features, n_classes, units=(128, 64), dropout=0.3):
+    model = keras.Sequential([
+        layers.Masking(mask_value=0.0, input_shape=(sequence_length, n_features)),
+        layers.GRU(units[0], return_sequences=True),
+        layers.Dropout(dropout),
+        layers.GRU(units[1]),
+        layers.Dropout(dropout),
+        layers.Dense(64, activation='relu'),
+        layers.Dense(n_classes, activation='softmax')
+    ])
+    return model
+
+def build_cnn_lstm(sequence_length, n_features, n_classes, filters=64, kernel_size=3, lstm_units=64, dropout=0.3):
+    model = keras.Sequential([
+        layers.Masking(mask_value=0.0, input_shape=(sequence_length, n_features)),
+        layers.Conv1D(filters, kernel_size, activation='relu', padding='same'),
+        layers.MaxPooling1D(2),
+        layers.LSTM(lstm_units),
+        layers.Dropout(dropout),
+        layers.Dense(64, activation='relu'),
+        layers.Dense(n_classes, activation='softmax')
+    ])
+    return model
+
+
+# =====================================================
+# 2. MODEL WRAPPER for grid search
+# =====================================================
+def build_generic_model(model_type, **kwargs):
+    if model_type == "LSTM":
+        return build_lstm(**kwargs)
+    if model_type == "GRU":
+        return build_gru(**kwargs)
+    if model_type == "CNN_LSTM":
+        return build_cnn_lstm(**kwargs)
+    raise ValueError(f"Unknown model_type: {model_type}")
+
+
+# =====================================================
+# 3. PARAMETER SPACE
+# =====================================================
 smote_param_grid = [
-    {'k_neighbors': 3, 'sampling_strategy': 'not majority', 'random_state': 42},
-    {'k_neighbors': 5, 'sampling_strategy': 0.7, 'random_state': 42},
+    {'k_neighbors': 5, 'sampling_strategy': 'auto', 'random_state': 42},
 ]
 
 model_param_grid = [
-    {'lstm_units': (64, 32), 'dropout_lstm': 0.2, 'dropout_dense': 0.2, 'learning_rate': 3e-4, 'gamma': 1.5},
-    {'lstm_units': (128, 64, 32), 'dropout_lstm': 0.3, 'dropout_dense': 0.3, 'learning_rate': 7e-4, 'gamma': 2.0},
-    {'lstm_units': (256, 128, 64), 'dropout_lstm': 0.35, 'dropout_dense': 0.3, 'learning_rate': 1e-3, 'gamma': 2.5},
-    {'lstm_units': (160, 80, 32), 'dropout_lstm': 0.25, 'dropout_dense': 0.25, 'learning_rate': 5e-4, 'gamma': 1.8}
- ]
+    {'model_type': 'LSTM', 'units': (128, 64), 'dropout': 0.3, 'learning_rate': 7e-4},
+    {'model_type': 'GRU', 'units': (128, 64), 'dropout': 0.3, 'learning_rate': 7e-4},
+    {'model_type': 'CNN_LSTM', 'filters': 64, 'kernel_size': 3, 'lstm_units': 64, 'dropout': 0.3, 'learning_rate': 1e-3},
+]
 
-training_params = {'epochs': 60, 'batch_size': 32}
+training_params = {'epochs': 50, 'batch_size': 32}
 
-# --------------------------------------------
-# 2. Filter out unrealistic or redundant combos
-# --------------------------------------------
-valid_combos = []
-n_classes = len(np.unique(y_train_base))
-for smote_params, model_params in product(smote_param_grid, model_param_grid):
-    strategy = smote_params.get('sampling_strategy', 'auto')
-    if isinstance(strategy, float) and n_classes > 2:
-        continue
-    lr = model_params['learning_rate']
-    dr = model_params['dropout_lstm']
-    if (lr < 1e-5) or (lr > 2e-3):
-        continue
-    if (dr > 0.5) or (dr < 0.1):
-        continue
-    valid_combos.append((smote_params, model_params))
 
-print(f"✅ {len(valid_combos)} valid combinations will be tested.\n")
+# =====================================================
+# 4. EXPERIMENT FUNCTION (wrapper)
+# =====================================================
+def run_single_experiment(smote_params, model_params):
+    smote_params_local = smote_params.copy()
+    model_params_local = model_params.copy()
+    model_type = model_params_local.pop("model_type")
+    learning_rate = model_params_local.pop("learning_rate", 1e-3)
+    dropout = model_params_local.pop("dropout", 0.3)
 
-# -----------------------------------
-# 3. Parallel execution with joblib
-# -----------------------------------
-def run_and_score(smote_params, model_params):
-    """Wrapper that executes one experiment and returns metrics."""
-    result = run_experiment(smote_params, model_params, **training_params)
-    # Combined score: prioritize F1 but include accuracy
-    result["combined_score"] = (
-        0.7 * result["val_f1_macro"] + 0.3 * result["val_accuracy"]
+    X_resampled, y_resampled = apply_smote_resampling(X_train_base, y_train_base, smote_params_local)
+
+    build_args = dict(
+        sequence_length=sequence_length,
+        n_features=n_features,
+        n_classes=n_classes
     )
+
+    model = build_generic_model(
+        model_type,
+        **build_args,
+        dropout=dropout,
+        **model_params_local
+    )
+
+    model.compile(
+        optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy', F1Score(num_classes=n_classes)]
+    )
+
+    history = model.fit(
+        X_resampled, y_resampled,
+        validation_data=(X_val_seq, y_val_enc),
+        epochs=training_params['epochs'],
+        batch_size=training_params['batch_size'],
+        callbacks=create_callbacks(),
+        verbose=0
+    )
+
+    val_pred_probs = model.predict(X_val_seq, verbose=0)
+    y_pred = np.argmax(val_pred_probs, axis=1)
+    f1_macro = f1_score(y_val_enc, y_pred, average='macro')
+    acc = np.mean(y_val_enc == y_pred)
+
+    history_dict = history.history
+    val_f1_history = history_dict.get('val_f1_score')
+    best_epoch = int(np.argmax(val_f1_history)) if val_f1_history is not None else None
+    best_val_f1 = float(max(val_f1_history)) if val_f1_history is not None else None
+
+    model_config = {**model_params_local}
+    model_config['model_type'] = model_type
+    model_config['dropout'] = dropout
+    model_config['learning_rate'] = learning_rate
+
+    result = {
+        'model_type': model_type,
+        'model_config': model_config,
+        'smote_params': smote_params_local,
+        'val_f1_macro': f1_macro,
+        'val_accuracy': acc,
+        'val_pred_probs': val_pred_probs.astype(np.float32),
+        'epochs_trained': len(history_dict.get('loss', [])),
+        'best_epoch': best_epoch,
+        'val_f1_keras_best': best_val_f1
+    }
+
+    tf.keras.backend.clear_session()
+    del model
+
     return result
 
-grid_results = Parallel(n_jobs=-1, backend="loky")(
-    delayed(run_and_score)(sm, md)
-    for sm, md in tqdm(valid_combos, desc="Running experiments")
+
+# =====================================================
+# 5. PARALLEL GRID SEARCH
+# =====================================================
+grid_results = Parallel(n_jobs=-1)(
+    delayed(run_single_experiment)(s, m)
+    for s, m in tqdm(
+        product(smote_param_grid, model_param_grid),
+        total=len(smote_param_grid) * len(model_param_grid),
+        desc="Training models"
+    )
 )
 
-# -----------------------------------
-# 4. Collect results
-# -----------------------------------
+
+# =====================================================
+# 6. ENSEMBLE (Weighted Voting)
+# =====================================================
+print("\n🧠 Creating ensemble predictions (weighted voting)...")
+preds = []
+weights = []
+
+for res in grid_results:
+    pred_probs = res['val_pred_probs']
+    preds.append(pred_probs)
+    weights.append(max(res['val_f1_macro'], 1e-6))
+
+ensemble_pred = np.average(preds, axis=0, weights=weights)
+ensemble_classes = np.argmax(ensemble_pred, axis=1)
+
+ensemble_f1 = f1_score(y_val_enc, ensemble_classes, average='macro')
+ensemble_acc = np.mean(ensemble_classes == y_val_enc)
+
+
+# =====================================================
+# 7. RESULTS SUMMARY
+# =====================================================
 grid_results_df = pd.DataFrame([
     {
-        'smote_k_neighbors': r['smote_params']['k_neighbors'],
-        'smote_strategy': r['smote_params'].get('sampling_strategy', 'auto'),
-        'lstm_units': str(r['model_params']['lstm_units']),
-        'dropout_lstm': r['model_params']['dropout_lstm'],
-        'dropout_dense': r['model_params']['dropout_dense'],
-        'learning_rate': r['model_params']['learning_rate'],
-        'gamma': r['model_params']['gamma'],
+        'model_type': r['model_type'],
         'val_f1_macro': r['val_f1_macro'],
-        'val_f1_weighted': r['val_f1_weighted'],
         'val_accuracy': r['val_accuracy'],
-        'combined_score': r['combined_score'],
-        'best_epoch': r['best_epoch']
     }
     for r in grid_results
 ])
 
-grid_results_df = grid_results_df.sort_values('combined_score', ascending=False).reset_index(drop=True)
-display(grid_results_df)
+print("\n📊 Individual model results:")
+display(grid_results_df.sort_values('val_f1_macro', ascending=False))
 
-# -----------------------------------
-# 5. Select and report best result
-# -----------------------------------
-best_result = grid_results_df.iloc[0]
-print("\n🥇 Best configuration found:")
-print(best_result)
+print("\n🥇 ENSEMBLE PERFORMANCE")
+print(f"F1-macro (ensemble): {ensemble_f1:.4f}")
+print(f"Accuracy (ensemble): {ensemble_acc:.4f}")
 
-# Store best configuration for retraining
-best_smote_params = next(r['smote_params'] for r in grid_results if r['combined_score'] == best_result['combined_score'])
-best_model_params = next(r['model_params'] for r in grid_results if r['combined_score'] == best_result['combined_score'])
+best_single_result_raw = max(grid_results, key=lambda r: r['val_f1_macro'])
+best_single_result = best_single_result_raw.copy()
+best_single_result.pop('val_pred_probs', None)
+best_model_config = best_single_result['model_config'].copy()
+best_smote_params = best_single_result['smote_params'].copy()
 
-print(f"\nMacro F1: {best_result['val_f1_macro']:.4f} | "
-      f"Accuracy: {best_result['val_accuracy']:.4f} | "
-      f"Gamma: {best_result['gamma']} | "
-      f"LR: {best_result['learning_rate']}")
-print("\n✅ Optimized grid search completed successfully.")
+print("\n🏆 Best single model:")
+print(
+    f"Type: {best_single_result['model_type']} | "
+    f"Macro F1: {best_single_result['val_f1_macro']:.4f} | "
+    f"Accuracy: {best_single_result['val_accuracy']:.4f}"
+)
+print(f"Hyperparameters: {best_model_config}")
+print(f"SMOTE params: {best_smote_params}")
 
 # %%
 # Retrain best configuration to capture full artifacts
 print("🎯 Retraining best configuration for detailed evaluation...")
+if 'best_single_result' not in globals():
+    raise RuntimeError("Esegui prima la cella di grid search per determinare la configurazione migliore.")
+
 refit_epochs = 80
-best_run = run_experiment(
-    best_smote_params,
-    best_model_params,
+best_model_config = best_single_result['model_config'].copy()
+best_smote_params = best_single_result['smote_params'].copy()
+best_model_type = best_model_config.pop('model_type')
+best_learning_rate = best_model_config.pop('learning_rate', 1e-3)
+best_dropout = best_model_config.pop('dropout', 0.3)
+best_model_summary = {
+    'model_type': best_model_type,
+    **best_model_config,
+    'dropout': best_dropout,
+    'learning_rate': best_learning_rate
+}
+print(f"Configurazione selezionata: {best_model_summary}")
+
+# Applica SMOTE alla configurazione migliore
+X_resampled_best, y_resampled_best = apply_smote_resampling(
+    X_train_base,
+    y_train_base,
+    best_smote_params
+ )
+
+# Costruisci e allena nuovamente il modello con più epoche
+best_model = build_generic_model(
+    best_model_type,
+    sequence_length=sequence_length,
+    n_features=n_features,
+    n_classes=n_classes,
+    dropout=best_dropout,
+    **best_model_config
+ )
+best_model.compile(
+    optimizer=keras.optimizers.Adam(learning_rate=best_learning_rate),
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy', F1Score(num_classes=n_classes)]
+ )
+
+best_history_obj = best_model.fit(
+    X_resampled_best,
+    y_resampled_best,
+    validation_data=(X_val_seq, y_val_enc),
     epochs=refit_epochs,
     batch_size=training_params['batch_size'],
-    return_model=True
-)
-best_model = best_run.pop('model')
-best_history = best_run['history']
-best_f1_per_class = best_run['f1_per_class']
+    callbacks=create_callbacks(),
+    verbose=0
+ )
+best_history = best_history_obj.history
+
+# Calcola metriche sulla validation
+y_val_pred = np.argmax(best_model.predict(X_val_seq, verbose=0), axis=1)
+best_f1_per_class = f1_score(y_val_enc, y_val_pred, average=None)
+val_f1_macro = f1_score(y_val_enc, y_val_pred, average='macro')
+val_f1_weighted = f1_score(y_val_enc, y_val_pred, average='weighted')
+val_accuracy = np.mean(y_val_pred == y_val_enc)
+best_val_metrics = {
+    'macro_f1': val_f1_macro,
+    'weighted_f1': val_f1_weighted,
+    'accuracy': val_accuracy
+}
+
 print(
-    f"Macro F1: {best_run['val_f1_macro']:.4f} | "
-    f"Weighted F1: {best_run['val_f1_weighted']:.4f} | "
-    f"Accuracy: {best_run['val_accuracy']:.4f}"
+    f"Macro F1: {val_f1_macro:.4f} | "
+    f"Weighted F1: {val_f1_weighted:.4f} | "
+    f"Accuracy: {val_accuracy:.4f}"
 )
 
 # %%
