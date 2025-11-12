@@ -1,11 +1,15 @@
 {
   "config": {
-    "units1": 128,
-    "units2": 48,
-    "head_units": 64,
+    "units1": 320,
+    "units2": 160,
+    "units3": 80,
+    "head_units": 160,
     "lr": 0.0006,
-    "weight_decay": 0.0002
+    "weight_decay": 0.0001,
+    "dropout": 0.1,
+    "spatial_do": 0.0,
+    "label_smoothing": 0.0
   },
-  "f1_macro": 0.7287706400606804,
+  "f1_macro": 0.8484695381247106,
   "T_target": 160
 }
