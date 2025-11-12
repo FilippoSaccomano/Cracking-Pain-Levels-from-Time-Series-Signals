@@ -1,0 +1,11 @@
+{
+  "config": {
+    "units1": 128,
+    "units2": 48,
+    "head_units": 64,
+    "lr": 0.0006,
+    "weight_decay": 0.0002
+  },
+  "f1_macro": 0.7287706400606804,
+  "T_target": 160
+}

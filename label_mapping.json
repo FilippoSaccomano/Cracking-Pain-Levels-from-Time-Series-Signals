@@ -1,0 +1,12 @@
+{
+  "label_to_id": {
+    "no_pain": 0,
+    "low_pain": 1,
+    "high_pain": 2
+  },
+  "id_to_label": {
+    "0": "no_pain",
+    "1": "low_pain",
+    "2": "high_pain"
+  }
+}
