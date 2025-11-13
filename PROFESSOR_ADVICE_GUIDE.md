@@ -1,6 +1,22 @@
 # 🎓 Guida ai Consigli del Professore per la Challenge AN2DL
 
-Questo documento spiega come sono stati integrati i consigli del professore nel notebook `pain_pirate_analysis_enhanced.ipynb`.
+Questo documento spiega come sono stati integrati i consigli del professore nei notebook migliorati.
+
+## 📦 Versioni Disponibili
+
+Sono disponibili **DUE versioni** complete con tutte le 7 tecniche ADVICE:
+
+1. **TensorFlow/Keras**: `pain_pirate_analysis_enhanced.ipynb`
+   - API high-level, facile da usare
+   - Training con `model.fit()`
+   - Ideale per deployment rapido
+
+2. **PyTorch**: `pain_pirate_analysis_pytorch.ipynb`
+   - Controllo completo, più flessibile
+   - Custom training loops
+   - Ideale per ricerca e sperimentazione
+
+**Scegli il framework che preferisci - entrambi implementano le stesse tecniche!**
 
 ## 📚 Riepilogo dei Consigli
 

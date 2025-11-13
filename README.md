@@ -7,8 +7,11 @@ Repository per la challenge di Artificial Neural Networks and Deep Learning.
 ### Notebook di Analisi
 
 - **`pain_pirate_analysis.ipynb`**: Notebook originale con la pipeline completa
-- **`pain_pirate_analysis_enhanced.ipynb`**: ✨ **NUOVO!** Versione migliorata con i consigli del professore
+- **`pain_pirate_analysis_enhanced.ipynb`**: ✨ **TensorFlow** - Versione con consigli del professore
+- **`pain_pirate_analysis_pytorch.ipynb`**: ✨ **PyTorch** - Versione con consigli del professore  
 - **`Timeseries Forecasting.ipynb`**: Notebook di riferimento del corso sulla previsione di serie temporali
+
+💡 **Scegli il framework che preferisci!** Entrambe le versioni enhanced includono tutte le 7 tecniche ADVICE.
 
 ### Documentazione
 
@@ -28,10 +31,25 @@ Il notebook `pain_pirate_analysis_enhanced.ipynb` include tutte le tecniche sugg
 
 ## 🚀 Come Iniziare
 
-1. **Leggi la guida**: Apri `PROFESSOR_ADVICE_GUIDE.md` per capire ogni tecnica
-2. **Esplora il notebook enhanced**: Apri `pain_pirate_analysis_enhanced.ipynb`
-3. **Sperimenta**: Prova le tecniche suggerite e confronta i risultati
-4. **Monitora F1-score macro**: Usa questa metrica per valutare i miglioramenti
+1. **Scegli il framework**: TensorFlow/Keras o PyTorch
+2. **Leggi la guida**: Apri `PROFESSOR_ADVICE_GUIDE.md` per capire ogni tecnica
+3. **Esplora il notebook enhanced**: 
+   - TensorFlow: `pain_pirate_analysis_enhanced.ipynb`
+   - PyTorch: `pain_pirate_analysis_pytorch.ipynb`
+4. **Sperimenta**: Prova le tecniche suggerite e confronta i risultati
+5. **Monitora F1-score macro**: Usa questa metrica per valutare i miglioramenti
+
+### 🔧 Framework Comparison
+
+| Aspetto | TensorFlow/Keras | PyTorch |
+|---------|------------------|---------|
+| **API Level** | High-level (Keras) | Mid-level |
+| **Training** | `model.fit()` | Custom loops |
+| **Learning Curve** | Più facile per iniziare | Più controllo |
+| **Industry** | Google, produzione | Research, startup |
+| **Best For** | Deployment rapido | Sperimentazione |
+
+**Entrambe le versioni implementano le stesse 7 tecniche ADVICE!**
 
 ## 📊 Dataset
 
@@ -41,12 +59,22 @@ Il notebook `pain_pirate_analysis_enhanced.ipynb` include tutte le tecniche sugg
 
 ## 🛠️ Setup
 
+### TensorFlow Version
 ```bash
 # Installa le dipendenze
 pip install tensorflow numpy pandas matplotlib seaborn scikit-learn statsmodels
 
 # Apri il notebook enhanced
 jupyter notebook pain_pirate_analysis_enhanced.ipynb
+```
+
+### PyTorch Version
+```bash
+# Installa le dipendenze
+pip install torch numpy pandas matplotlib seaborn scikit-learn statsmodels tqdm
+
+# Apri il notebook PyTorch
+jupyter notebook pain_pirate_analysis_pytorch.ipynb
 ```
 
 ## 🎯 Obiettivo della Challenge
