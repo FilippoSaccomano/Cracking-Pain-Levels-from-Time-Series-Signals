@@ -25,11 +25,20 @@ Sono disponibili **DUE versioni** complete con tutte le 7 tecniche ADVICE:
 
 **Cosa significa**: Non scegliere arbitrariamente la dimensione della finestra (WINDOW_SIZE). Usa l'analisi di autocorrelazione per capire quanto il passato influenza il presente nei tuoi dati.
 
-**Come è implementato**: 
+**Come è implementato** (versione corretta): 
 - Nuova sezione dopo l'analisi delle features
 - Analizza l'autocorrelation function (ACF) per ogni feature
-- Suggerisce una WINDOW_SIZE basata sui dati
-- Visualizza dove la correlazione scende sotto 0.5
+- **Analizza ogni campione separatamente** (non concatena dati da campioni diversi)
+- **Usa soglia di significatività statistica** (1.96/√n al 95% di confidenza)
+- Calcola la mediana dei lag significativi tra i campioni
+- Suggerisce un range ragionevole per WINDOW_SIZE
+- Visualizza il lag mediano su ogni grafico ACF
+
+**Miglioramenti rispetto alla versione iniziale**:
+- ✅ Non concatena più dati da campioni diversi (evita discontinuità artificiali)
+- ✅ Usa significatività statistica invece di soglia arbitraria (0.5)
+- ✅ Calcola statistiche robuste (mediana) tra campioni multipli
+- ✅ Fornisce range ragionevole con limiti min/max
 
 **Dove trovarlo nel notebook**: Dopo "Visualizzazione di un campione"
 
