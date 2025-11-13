@@ -1,24 +1,66 @@
+# %% [markdown]
+# # Core libraries
+# import os
+# import random
+# from collections import defaultdict
+# import numpy as np
+# import pandas as pd
+# import matplotlib.pyplot as plt
+# import seaborn as sns
+# import warnings
+# warnings.filterwarnings('ignore')
+# 
+# # Deep learning
+# import tensorflow as tf
+# from tensorflow import keras
+# from tensorflow.keras import layers
+# 
+# # Preprocessing and evaluation
+# from sklearn.model_selection import train_test_split
+# from sklearn.preprocessing import StandardScaler, LabelEncoder
+# from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay, f1_score
+# from sklearn.utils import class_weight
+# 
+# # Set random seeds for reproducibility
+# os.environ["PYTHONHASHSEED"] = "42"
+# random.seed(42)
+# np.random.seed(42)
+# tf.random.set_seed(42)
+# tf.keras.utils.set_random_seed(42)
+# try:
+#     tf.config.experimental.enable_op_determinism()
+# except (AttributeError, RuntimeError):
+#     pass
+# 
+# # Style settings
+# plt.style.use('seaborn-v0_8-darkgrid')
+# sns.set_palette("husl")
+# 
+# print(f"TensorFlow version: {tf.__version__}")
+# print(f"GPU Available: {tf.config.list_physical_devices('GPU')}")
+# print("\n⚓ All libraries loaded successfully!")
+
 # %%
 # Core libraries
+import os
+from collections import defaultdict
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import pickle
 import warnings
 warnings.filterwarnings('ignore')
 
-# Deep Learning
+# Deep learning
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras import layers, models
+from tensorflow.keras import layers
 
 # Preprocessing and evaluation
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay, f1_score
-from sklearn.utils import resample, class_weight
-from imblearn.over_sampling import SMOTE
+from sklearn.utils import class_weight
 
 # Set random seeds for reproducibility
 np.random.seed(42)
@@ -31,6 +73,11 @@ sns.set_palette("husl")
 print(f"TensorFlow version: {tf.__version__}")
 print(f"GPU Available: {tf.config.list_physical_devices('GPU')}")
 print("\n⚓ All libraries loaded successfully!")
+
+# %% [markdown]
+# ## 1. Caricamento dei dati
+# 
+# Importiamo i file di training e impostiamo una panoramica generale su dimensioni e frequenza temporale.
 
 # %%
 # Load training data
@@ -45,6 +92,11 @@ print(f"\nNumber of unique samples: {X_train['sample_index'].nunique()}")
 print(f"Time steps per sample (min-max): {X_train.groupby('sample_index').size().min()} - {X_train.groupby('sample_index').size().max()}")
 print(f"\nFeature columns: {X_train.shape[1]}")
 
+# %% [markdown]
+# ### Esplorazione delle prime righe
+# 
+# Visualizziamo un estratto di feature e label per verificare la qualità del caricamento.
+
 # %%
 # Display first few rows
 print("\n📊 First few rows of training data:")
@@ -52,6 +104,11 @@ display(X_train.head())
 
 print("\n🏷️ First few labels:")
 display(y_train.head())
+
+# %% [markdown]
+# ### Distribuzione delle etichette
+# 
+# Analizziamo il bilanciamento tra le classi prima del preprocessing.
 
 # %%
 # Label distribution
@@ -80,6 +137,11 @@ print("\n📈 Label Statistics:")
 print(label_counts)
 print(f"\nClass balance: {label_counts.min() / label_counts.max():.2%}")
 
+# %% [markdown]
+# ### Analisi delle feature
+# 
+# Cataloghiamo le colonne rilevanti per le fasi successive di preprocessing.
+
 # %%
 # Explore feature types
 print("\n🔍 Feature Analysis:")
@@ -100,6 +162,11 @@ print(f"\n🦴 Joint Measurements: {len(joint_cols)}")
 print(f"Joints: joint_00 to joint_{len(joint_cols)-1:02d}")
 
 print(f"\n✅ Total features (excluding sample_index, time): {len(pain_survey_cols) + len(body_char_cols) + len(joint_cols)}")
+
+# %% [markdown]
+# ### Visualizzazione di un campione
+# 
+# Osserviamo le serie temporali delle misure per verificare andamenti e range dei segnali.
 
 # %%
 # Visualize a sample time series
@@ -149,130 +216,259 @@ axes[1, 1].grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
+# %% [markdown]
+# ## 2. Preprocessing a finestre scorrevoli
+# 
+# Definiamo le utility per pulizia dei segnali, generazione delle finestre e augmentations stocastiche.
+
 # %%
-def preprocess_features(df):
-    """
-    Preprocess features: handle categorical variables and missing values
-    """
-    # Exclude identifier columns
-    exclude_cols = ['sample_index', 'time']
-    feature_cols = [col for col in df.columns if col not in exclude_cols]
-    
-    # Categorical columns available in the dataset
-    categorical_cols = [col for col in ['n_legs', 'n_hands', 'n_eyes'] if col in df.columns]
-    
-    df_processed = df[feature_cols].copy()
-    
-    # Convert categorical to numeric with safe fallback
-    mapping = {'zero': 0, 'one': 1, 'two': 2, 'three': 3}
-    for col in categorical_cols:
-        mapped = df_processed[col].map(mapping)
-        if mapped.isna().all():
-            fill_value = 0
+# Sliding-window preprocessing and augmentation helpers
+WINDOW_SIZE = 60
+WINDOW_STRIDE = 30
+
+CATEGORICAL_MAP = {'zero': 0, 'one': 1, 'two': 2, 'three': 3}
+CATEGORICAL_COLS = ['n_legs', 'n_hands', 'n_eyes']
+PAIN_SURVEY_COLS = [f'pain_survey_{i}' for i in range(1, 5)]
+JOINT_COLS = [f'joint_{i:02d}' for i in range(31)]
+
+def map_categorical_features(df):
+    for col in CATEGORICAL_COLS:
+        if col in df.columns:
+            mapped = df[col].map(CATEGORICAL_MAP)
+            if mapped.isna().all():
+                df[col] = 0.0
+            else:
+                fill_value = float(mapped.dropna().median()) if not mapped.dropna().empty else 0.0
+                df[col] = mapped.fillna(fill_value)
+    return df
+
+def interpolate_signals(df):
+    joint_cols_present = [col for col in JOINT_COLS if col in df.columns]
+    if joint_cols_present:
+        df.loc[:, joint_cols_present] = df[joint_cols_present].replace(0, np.nan)
+        df.loc[:, joint_cols_present] = df[joint_cols_present].interpolate(method='linear', limit_direction='both', axis=0)
+        df.loc[:, joint_cols_present] = df[joint_cols_present].fillna(method='bfill').fillna(method='ffill').fillna(0.0)
+    numeric_cols = [col for col in df.columns if col not in ['sample_index', 'time']]
+    df.loc[:, numeric_cols] = df[numeric_cols].interpolate(method='linear', limit_direction='both', axis=0)
+    df.loc[:, numeric_cols] = df[numeric_cols].fillna(0.0)
+    return df
+
+def preprocess_sample(sample_df):
+    df = sample_df.sort_values('time').reset_index(drop=True).copy()
+    df = map_categorical_features(df)
+    df = interpolate_signals(df)
+    feature_cols = [col for col in df.columns if col not in ['sample_index', 'time']]
+    features = df[feature_cols].to_numpy(dtype=np.float32)
+    return features
+
+def create_windows(sequence, window_size=WINDOW_SIZE, stride=WINDOW_STRIDE):
+    windows = []
+    n_steps, n_features = sequence.shape
+    if n_steps <= window_size:
+        padded = np.zeros((window_size, n_features), dtype=np.float32)
+        padded[:n_steps] = sequence
+        windows.append(padded)
+        return windows
+    start = 0
+    while start + window_size <= n_steps:
+        windows.append(sequence[start:start + window_size].astype(np.float32))
+        start += stride
+    if start < n_steps:
+        tail = sequence[-window_size:]
+        if tail.shape[0] < window_size:
+            padded = np.zeros((window_size, n_features), dtype=np.float32)
+            padded[:tail.shape[0]] = tail
+            windows.append(padded)
         else:
-            mode_series = mapped.mode(dropna=True)
-            fill_value = mode_series.iloc[0] if not mode_series.empty else 0
-        df_processed[col] = mapped.fillna(fill_value)
-    
-    # Fill remaining NaN
-    df_processed = df_processed.fillna(0)
-    
-    return df_processed.values
+            windows.append(tail.astype(np.float32))
+    return windows
 
-print("✅ Preprocessing functions defined!")
+def _resample_sequence(seq, target_length):
+    if seq.shape[0] == target_length:
+        return seq.astype(np.float32)
+    original_idx = np.linspace(0, seq.shape[0] - 1, num=seq.shape[0])
+    target_idx = np.linspace(0, seq.shape[0] - 1, num=target_length)
+    resampled = np.empty((target_length, seq.shape[1]), dtype=np.float32)
+    for feature_idx in range(seq.shape[1]):
+        resampled[:, feature_idx] = np.interp(target_idx, original_idx, seq[:, feature_idx])
+    return resampled
+
+def augment_noise(window, sigma=0.02, rng=None):
+    rng = rng or np.random.default_rng()
+    noise = rng.normal(0.0, sigma, size=window.shape).astype(np.float32)
+    return (window + noise).astype(np.float32)
+
+def augment_scaling(window, scale_range=(0.9, 1.1), rng=None):
+    rng = rng or np.random.default_rng()
+    scale = rng.uniform(*scale_range)
+    return (window * scale).astype(np.float32)
+
+def augment_time_warp(window, stretch_range=(0.8, 1.2), rng=None):
+    rng = rng or np.random.default_rng()
+    stretch = rng.uniform(*stretch_range)
+    target_length = max(2, int(round(window.shape[0] * stretch)))
+    stretched = _resample_sequence(window, target_length)
+    return _resample_sequence(stretched, window.shape[0])
+
+def augment_dropout(window, drop_range=(0.05, 0.10), rng=None):
+    rng = rng or np.random.default_rng()
+    drop_ratio = rng.uniform(*drop_range)
+    n_drop = max(1, int(round(drop_ratio * window.shape[0])))
+    drop_indices = rng.choice(window.shape[0], size=n_drop, replace=False)
+    augmented = window.copy()
+    augmented[drop_indices] = 0.0
+    return augmented.astype(np.float32)
+
+AUGMENTATIONS = ['noise', 'time_warp', 'scaling', 'dropout']
+
+def apply_random_augmentations(window, rng):
+    augmented = window.copy()
+    n_ops = int(rng.integers(1, len(AUGMENTATIONS) + 1))
+    chosen = rng.choice(AUGMENTATIONS, size=n_ops, replace=False)
+    for op in chosen:
+        if op == 'noise':
+            augmented = augment_noise(augmented, sigma=0.02, rng=rng)
+        elif op == 'time_warp':
+            augmented = augment_time_warp(augmented, stretch_range=(0.8, 1.2), rng=rng)
+        elif op == 'scaling':
+            augmented = augment_scaling(augmented, scale_range=(0.9, 1.1), rng=rng)
+        elif op == 'dropout':
+            augmented = augment_dropout(augmented, drop_range=(0.05, 0.10), rng=rng)
+    return augmented.astype(np.float32)
+
+print("✅ Sliding-window preprocessing utilities ready!")
+
+# %% [markdown]
+# ## 3. Costruzione del dataset a finestre
+# 
+# Convertiamo i segnali grezzi in tensori uniformi, applichiamo lo scaling e generiamo le finestre augmentate.
 
 # %%
-# Create sequences
-print("🔄 Creating sequences...")
+# %% 🔄 Build sliding-window dataset with augmentations
+print("🔄 Building sliding-window dataset...")
 
-samples = []
-labels = []
+rng = np.random.default_rng(42)
+windows = []
+window_labels = []
 
 sample_indices = X_train['sample_index'].unique()
 
+# --- 1️⃣ Creazione finestre ---
 for sample_idx in sample_indices:
-    # Get all time steps for this sample
     sample_data = X_train[X_train['sample_index'] == sample_idx].copy()
-    sample_data = sample_data.sort_values('time')
-    
-    # Preprocess features
-    features = preprocess_features(sample_data)
-    samples.append(features)
-    
-    # Get label
+    processed = preprocess_sample(sample_data)
+    sample_windows = create_windows(processed, window_size=WINDOW_SIZE, stride=WINDOW_STRIDE)
     label = y_train[y_train['sample_index'] == sample_idx]['label'].iloc[0]
-    labels.append(label)
+    windows.extend(sample_windows)
+    window_labels.extend([label] * len(sample_windows))
 
-print(f"✅ Created {len(samples)} sequences")
-print(f"   Sequence length range: {min(s.shape[0] for s in samples)} - {max(s.shape[0] for s in samples)} time steps")
-print(f"   Features per time step: {samples[0].shape[1]}")
+total_windows = len(windows)
+feature_dim = windows[0].shape[1] if windows else 0
+print(f"✅ Generated {total_windows} windows")
+print(f"   Window size: {WINDOW_SIZE} | Stride: {WINDOW_STRIDE}")
+print(f"   Feature dimensionality: {feature_dim}")
 
-# Scale features across all time steps to stabilize training
-print("\n⚖️ Scaling features with StandardScaler...")
-scaler = StandardScaler()
-scaler.fit(np.vstack(samples))
-samples = [scaler.transform(sample) for sample in samples]
-print("✅ Scaling complete!")
-
-# %%
-# Pad sequences to uniform length
-max_len = max([s.shape[0] for s in samples])
-n_features = samples[0].shape[1]
-
-print(f"\n📏 Padding sequences to length: {max_len}")
-
-X_padded = np.zeros((len(samples), max_len, n_features))
-for i, sample in enumerate(samples):
-    X_padded[i, :sample.shape[0], :] = sample
-
-print(f"✅ Padded data shape: {X_padded.shape}")
-print(f"   Format: (samples, time_steps, features)")
-
-# %%
-# Encode labels
+# --- 2️⃣ Encoding delle label ---
 label_encoder = LabelEncoder()
-y_encoded = label_encoder.fit_transform(labels)
+encoded_labels = label_encoder.fit_transform(window_labels)
 
-class_counts = pd.Series(y_encoded).value_counts().sort_index()
-print("\n🏷️ Label Encoding:")
-for i, label in enumerate(label_encoder.classes_):
-    print(f"   {label} → {i}")
-print("\nClass counts before balancing:")
-for cls, count in class_counts.items():
-    print(f"   Class {cls} ({label_encoder.classes_[cls]}): {count}")
+windows_array = np.stack(windows).astype(np.float32)
+labels_array = encoded_labels.astype(np.int32)
 
-# %%
-# Create train/validation split (80/20)
-print("\n✂️ Creating train/validation split...")
-
+# --- 3️⃣ Train/Validation split ---
 X_train_seq, X_val_seq, y_train_enc, y_val_enc = train_test_split(
-    X_padded, y_encoded,
+    windows_array,
+    labels_array,
     test_size=0.2,
     random_state=42,
-    stratify=y_encoded
+    stratify=labels_array
 )
+y_train_enc = y_train_enc.astype(np.int32)
+y_val_enc = y_val_enc.astype(np.int32)
 
-print(f"✅ Training set: {X_train_seq.shape[0]} samples")
-print(f"✅ Validation set: {X_val_seq.shape[0]} samples")
+print(f"🧱 Training windows before augmentation: {X_train_seq.shape[0]}")
+print(f"🧱 Validation windows: {X_val_seq.shape[0]}")
 
-sequence_length = X_train_seq.shape[1]
-n_features = X_train_seq.shape[2]
+# --- 4️⃣ Normalizzazione con MinMaxScaler ---
+from sklearn.preprocessing import MinMaxScaler
 
-# Show class distribution before balancing
-train_dist_before = pd.Series(y_train_enc).value_counts().sort_index()
-val_dist = pd.Series(y_val_enc).value_counts().sort_index()
+scaler = MinMaxScaler()
+n_samples, seq_len, n_features = X_train_seq.shape
 
-print("\n📊 Class distribution (original training split):")
-for i, label in enumerate(label_encoder.classes_):
-    print(f"   {label}: Train={train_dist_before.get(i, 0)}, Val={val_dist.get(i, 0)}")
+X_train_seq = scaler.fit_transform(
+    X_train_seq.reshape(-1, n_features)
+).reshape(n_samples, seq_len, n_features)
 
-# Keep original training data for resampling experiments
+X_val_seq = scaler.transform(
+    X_val_seq.reshape(-1, n_features)
+).reshape(X_val_seq.shape[0], seq_len, n_features)
+
+print("✅ Normalizzazione MinMaxScaler applicata")
+
+# --- 5️⃣ Data augmentation ---
+train_count_before_aug = X_train_seq.shape[0]
+augmented_windows = list(X_train_seq)
+augmented_labels = list(y_train_enc)
+
+for window, label in zip(X_train_seq, y_train_enc):
+    if rng.random() < 0.5:
+        augmented = apply_random_augmentations(window, rng)
+        augmented_windows.append(augmented)
+        augmented_labels.append(label)
+
+X_train_seq = np.stack(augmented_windows).astype(np.float32)
+y_train_enc = np.asarray(augmented_labels, dtype=np.int32)
+
+print(f"✨ Training windows after augmentation: {X_train_seq.shape[0]} (Δ {X_train_seq.shape[0] - train_count_before_aug})")
+
+# --- 6️⃣ Shape finali ---
+sequence_length = WINDOW_SIZE
+n_features = feature_dim
+
+print(f"📐 Final tensor shapes → X_train: {X_train_seq.shape}, X_val: {X_val_seq.shape}")
+
+# %% [markdown]
+# ### Statistiche sulle etichette
+# 
+# Valutiamo la distribuzione delle classi dopo la fase di augmentazione e suddivisione.
+
+# %%
+# Label encoding overview
+class_counts = pd.Series(y_train_enc).value_counts().sort_index()
+print("\n🏷️ Label Encoding:")
+for idx, label in enumerate(label_encoder.classes_):
+    print(f"   {label} → {idx}")
+
+print("\nClass distribution (training after augmentation):")
+for cls_idx, count in class_counts.items():
+    print(f"   Class {cls_idx} ({label_encoder.classes_[cls_idx]}): {count}")
+
+val_counts = pd.Series(y_val_enc).value_counts().sort_index()
+print("\nClass distribution (validation):")
+for cls_idx, count in val_counts.items():
+    print(f"   Class {cls_idx} ({label_encoder.classes_[cls_idx]}): {count}")
+
+# %% [markdown]
+# ### Persistenza dei tensori base
+# 
+# Manteniamo copie numpy dei tensori di train e validation per facilitare gli esperimenti successivi.
+
+# %%
+# Persist base tensors for downstream experiments
+print("\n💾 Storing base training tensors...")
+
 X_train_base = X_train_seq.astype(np.float32)
 y_train_base = y_train_enc.copy()
+X_val_base = X_val_seq.astype(np.float32)
+y_val_base = y_val_enc.copy()
 
-print("\n🧪 Stored base training tensors for balancing strategies.")
+print(f"Training base shape: {X_train_base.shape}")
+print(f"Validation base shape: {X_val_base.shape}")
 
-
+# %% [markdown]
+# ## 4. Metriche e callback
+# 
+# Definiamo la metrica personalizzata F1 macro per il monitoraggio durante l'addestramento.
 
 # %%
 # Custom F1-Score Metric for Keras
@@ -321,71 +517,10 @@ class F1Score(keras.metrics.Metric):
 
 print("✅ F1-Score metric class defined!")
 
-# %%
-def make_sparse_focal_loss(gamma=1.5, alpha=None):
-    """Build a sparse categorical focal loss with optional per-class alpha weights."""
-    alpha_tensor = None
-    if alpha is not None:
-        alpha_tensor = tf.constant(alpha, dtype=tf.float32)
-
-    def loss_fn(y_true, y_pred):
-        y_true = tf.cast(tf.reshape(y_true, [-1]), tf.int32)
-        y_pred = tf.clip_by_value(y_pred, tf.keras.backend.epsilon(), 1.0 - tf.keras.backend.epsilon())
-        y_true_one_hot = tf.one_hot(y_true, depth=tf.shape(y_pred)[-1])
-        focal_weight = tf.pow(1.0 - y_pred, gamma)
-        if alpha_tensor is not None:
-            class_weights = tf.gather(alpha_tensor, y_true)
-            class_weights = tf.expand_dims(class_weights, axis=-1)
-            focal_weight *= class_weights
-        cross_entropy = -y_true_one_hot * tf.math.log(y_pred)
-        per_sample_loss = tf.reduce_sum(focal_weight * cross_entropy, axis=-1)
-        return per_sample_loss
-
-    return loss_fn
-
-print("✅ Sparse focal loss factory defined!")
-
-# %%
-def build_model(
-    sequence_length, 
-    n_features, 
-    n_classes, 
-    lstm_units=(128, 64, 32), 
-    dense_units=(64, 32), 
-    dropout_lstm=0.3, 
-    dropout_dense=0.3, 
-    learning_rate=0.001, 
-    gamma=2.0, 
-    alpha=None
-):
-    """
-    Build deep LSTM model for time series classification
-    All weights randomly initialized - NO pre-training!
-    """
-    model = models.Sequential()
-    model.add(layers.Input(shape=(sequence_length, n_features), name='input_sequence'))
-    model.add(layers.Masking(mask_value=0.0, name='mask_padding'))
-
-    for idx, units in enumerate(lstm_units):
-        return_sequences = idx < len(lstm_units) - 1
-        model.add(layers.LSTM(units, return_sequences=return_sequences, name=f'lstm_layer_{idx + 1}'))
-        model.add(layers.Dropout(dropout_lstm))
-        model.add(layers.BatchNormalization())
-
-    for idx, units in enumerate(dense_units):
-        model.add(layers.Dense(units, activation='relu', name=f'dense_{idx + 1}'))
-        model.add(layers.Dropout(dropout_dense))
-
-    model.add(layers.Dense(n_classes, activation='softmax', name='output'))
-
-    focal_loss_fn = make_sparse_focal_loss(gamma=gamma, alpha=alpha)
-    model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
-        loss=focal_loss_fn,
-        metrics=['accuracy', F1Score(num_classes=n_classes)]
-    )
-
-    return model
+# %% [markdown]
+# ### Metadati per l'addestramento
+# 
+# Raccogliamo informazioni chiave sul problema per configurare i modelli.
 
 # %%
 # Model metadata
@@ -395,119 +530,111 @@ print(f"Number of classes: {n_classes}")
 print(f"Sequence length: {sequence_length}")
 print(f"Features per timestep: {n_features}")
 
+# %% [markdown]
+# ### Callback di addestramento
+# 
+# Utilizziamo early stopping e riduzione del learning rate per favorire la generalizzazione.
+
 # %%
 # Define callbacks factory
 def create_callbacks():
     return [
         keras.callbacks.EarlyStopping(
             monitor='val_f1_score',
-            patience=10,
             mode='max',
+            patience=10,
             restore_best_weights=True,
-            verbose=0
+            verbose=1
         ),
         keras.callbacks.ReduceLROnPlateau(
             monitor='val_f1_score',
-            factor=0.5,
-            patience=5,
             mode='max',
-            min_lr=1e-6,
-            verbose=0
+            factor=0.5,
+            patience=4,
+            min_lr=1e-5,
+            verbose=1
+        ),
+        keras.callbacks.ModelCheckpoint(
+            filepath='best_model.keras',
+            monitor='val_f1_score',
+            mode='max',
+            save_best_only=True,
+            verbose=1
         )
     ]
 
-print("✅ Callback factory ready!")
+print("✅ Callback factory ready (EarlyStopping + LR scheduler + checkpoint)!")
+
+# %% [markdown]
+# ### Utility per i pesi di classe
+# 
+# Calcoliamo pesi bilanciati da fornire a Keras per mitigare lo sbilanciamento delle etichette.
 
 # %%
-def apply_smote_resampling(X_train, y_train, smote_params):
-    smote = SMOTE(**smote_params)
-    X_flat = X_train.reshape(X_train.shape[0], -1)
-    X_res_flat, y_res = smote.fit_resample(X_flat, y_train)
-    X_res = X_res_flat.reshape(-1, sequence_length, n_features)
-    return X_res.astype(np.float32), y_res
+# Training utilities aligned with sliding-window approach
+def compute_balanced_class_weights(labels):
+    """Calcola pesi bilanciati da passare a Keras per gestire lo sbilanciamento delle classi."""
+    classes = np.unique(labels)
+    weights = class_weight.compute_class_weight(class_weight='balanced', classes=classes, y=labels)
+    return {int(cls): float(weight) for cls, weight in zip(classes, weights)}
 
-def compute_alpha_vector(y_labels, n_classes):
-    present_classes = np.unique(y_labels)
-    weights = class_weight.compute_class_weight(class_weight='balanced', classes=present_classes, y=y_labels)
-    alpha = np.ones(n_classes, dtype=np.float32)
-    for cls, weight in zip(present_classes, weights):
-        alpha[int(cls)] = float(weight)
-    return alpha
-
-def run_experiment(smote_params, model_params, epochs=60, batch_size=32, return_model=False):
-    tf.keras.backend.clear_session()
-    X_resampled, y_resampled = apply_smote_resampling(X_train_base, y_train_base, smote_params)
-    alpha_vec = compute_alpha_vector(y_resampled, n_classes)
-    callbacks = create_callbacks()
-    model = build_model(
-        sequence_length=sequence_length,
-        n_features=n_features,
-        n_classes=n_classes,
-        alpha=alpha_vec,
-        **model_params
-    )
-    history = model.fit(
-        X_resampled, y_resampled,
-        validation_data=(X_val_seq, y_val_enc),
-        epochs=epochs,
-        batch_size=batch_size,
-        callbacks=callbacks,
-        verbose=0
-    )
-    best_val_f1 = float(max(history.history['val_f1_score']))
-    best_epoch = int(np.argmax(history.history['val_f1_score']))
-    y_pred = np.argmax(model.predict(X_val_seq, verbose=0), axis=1)
-    f1_macro = f1_score(y_val_enc, y_pred, average='macro')
-    f1_weighted = f1_score(y_val_enc, y_pred, average='weighted')
-    f1_per_class = f1_score(y_val_enc, y_pred, average=None)
-    result = {
-        'smote_params': smote_params,
-        'model_params': model_params,
-        'epochs_trained': len(history.history['loss']),
-        'best_epoch': best_epoch,
-        'history': history.history,
-        'val_f1_macro': f1_macro,
-        'val_f1_weighted': f1_weighted,
-        'val_f1_keras_best': best_val_f1,
-        'val_accuracy': float(history.history['val_accuracy'][best_epoch]),
-        'f1_per_class': f1_per_class
-    }
-    if return_model:
-        result['model'] = model
-        result['X_resampled_shape'] = X_resampled.shape
-    return result
+# %% [markdown]
+# ## 5. Ricerca di modelli sequenziali
+# 
+# Configuriamo la griglia di esperimenti (LSTM/GRU/CNN-LSTM) e monitoriamo l'avanzamento con tqdm.
 
 # %%
 # %% ⚡ ENSEMBLE GRID SEARCH (LSTM, GRU, CNN-LSTM)
-from itertools import product
+from contextlib import contextmanager
+import joblib
 from joblib import Parallel, delayed
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras import layers, models
+from tensorflow.keras import layers
+from sklearn.metrics import f1_score
 
 print("🚀 Starting Ensemble Grid Search...")
 
 # =====================================================
 # 1. MODEL BUILDERS
 # =====================================================
-def build_lstm(sequence_length, n_features, n_classes, units=(128, 64), dropout=0.3):
-    model = keras.Sequential([
-        layers.Masking(mask_value=0.0, input_shape=(sequence_length, n_features)),
-        layers.LSTM(units[0], return_sequences=True),
-        layers.Dropout(dropout),
-        layers.LSTM(units[1]),
-        layers.Dropout(dropout),
-        layers.Dense(64, activation='relu'),
-        layers.Dense(n_classes, activation='softmax')
-    ])
+def build_lstm(sequence_length, n_features, n_classes,
+               units=(128, 64), dense_units=(64,),
+               dropout=0.3, dense_dropout=None, recurrent_dropout=0.0,
+               bidirectional=False, use_layernorm=True):
+    dense_dropout = dropout if dense_dropout is None else dense_dropout
+    model = keras.Sequential()
+    model.add(layers.Input(shape=(sequence_length, n_features)))
+
+    for idx, unit_count in enumerate(units):
+        return_sequences = idx < len(units) - 1
+        lstm_layer = layers.LSTM(
+            unit_count,
+            return_sequences=return_sequences,
+            recurrent_dropout=recurrent_dropout
+        )
+        if bidirectional:
+            lstm_layer = layers.Bidirectional(lstm_layer)
+        model.add(lstm_layer)
+        if use_layernorm and return_sequences:
+            model.add(layers.LayerNormalization())
+        model.add(layers.Dropout(dropout))
+
+    for d in dense_units:
+        model.add(layers.Dense(d, activation='relu'))
+        if dense_dropout > 0:
+            model.add(layers.Dropout(dense_dropout))
+
+    model.add(layers.Dense(n_classes, activation='softmax'))
     return model
+
 
 def build_gru(sequence_length, n_features, n_classes, units=(128, 64), dropout=0.3):
     model = keras.Sequential([
-        layers.Masking(mask_value=0.0, input_shape=(sequence_length, n_features)),
+        layers.Input(shape=(sequence_length, n_features)),
         layers.GRU(units[0], return_sequences=True),
         layers.Dropout(dropout),
         layers.GRU(units[1]),
@@ -517,21 +644,77 @@ def build_gru(sequence_length, n_features, n_classes, units=(128, 64), dropout=0
     ])
     return model
 
-def build_cnn_lstm(sequence_length, n_features, n_classes, filters=64, kernel_size=3, lstm_units=64, dropout=0.3):
-    model = keras.Sequential([
-        layers.Masking(mask_value=0.0, input_shape=(sequence_length, n_features)),
-        layers.Conv1D(filters, kernel_size, activation='relu', padding='same'),
-        layers.MaxPooling1D(2),
-        layers.LSTM(lstm_units),
-        layers.Dropout(dropout),
-        layers.Dense(64, activation='relu'),
-        layers.Dense(n_classes, activation='softmax')
-    ])
+
+def build_cnn_lstm(sequence_length, n_features, n_classes,
+                   filters=64, kernel_size=3, lstm_units=64,
+                   dense_units=(64,), dropout=0.3, dense_dropout=None,
+                   recurrent_dropout=0.0, bidirectional=False,
+                   use_layernorm=True, use_noise=True):
+    dense_dropout = dropout if dense_dropout is None else dense_dropout
+    model = keras.Sequential()
+
+    # Input + Gaussian noise
+    if use_noise:
+        model.add(layers.GaussianNoise(0.01, input_shape=(sequence_length, n_features)))
+    else:
+        model.add(layers.Input(shape=(sequence_length, n_features)))
+
+    # CNN block
+    model.add(layers.Conv1D(filters, kernel_size, activation='relu', padding='same'))
+    model.add(layers.MaxPooling1D(pool_size=2))
+    if use_layernorm:
+        model.add(layers.LayerNormalization())
+    model.add(layers.Dropout(dropout))
+
+    # LSTM block
+    if bidirectional:
+        model.add(layers.Bidirectional(
+            layers.LSTM(lstm_units, recurrent_dropout=recurrent_dropout)
+        ))
+    else:
+        model.add(layers.LSTM(lstm_units, recurrent_dropout=recurrent_dropout))
+    model.add(layers.Dropout(dropout))
+
+    # Dense head
+    for d in dense_units:
+        model.add(layers.Dense(d, activation='relu'))
+        model.add(layers.Dropout(dense_dropout))
+
+    # Output
+    model.add(layers.Dense(n_classes, activation='softmax'))
+    return model
+
+
+def build_bilstm(sequence_length, n_features, n_classes,
+                 units=(256, 128), dropout=0.3, recurrent_dropout=0.0,
+                 merge_mode='concat', dense_units=None, dense_dropout=None):
+    dense_units = tuple(dense_units or ())
+    dense_dropout = dropout if dense_dropout is None else dense_dropout
+    model = keras.Sequential()
+    model.add(layers.Input(shape=(sequence_length, n_features)))
+
+    for idx, unit_count in enumerate(units):
+        return_sequences = idx < len(units) - 1
+        model.add(layers.Bidirectional(
+            layers.LSTM(unit_count, return_sequences=return_sequences,
+                        recurrent_dropout=recurrent_dropout),
+            merge_mode=merge_mode
+        ))
+        model.add(layers.Dropout(dropout))
+        if return_sequences:
+            model.add(layers.BatchNormalization())
+
+    for dense_count in dense_units:
+        model.add(layers.Dense(dense_count, activation='relu'))
+        if dense_dropout > 0:
+            model.add(layers.Dropout(dense_dropout))
+
+    model.add(layers.Dense(n_classes, activation='softmax'))
     return model
 
 
 # =====================================================
-# 2. MODEL WRAPPER for grid search
+# 2. MODEL WRAPPER
 # =====================================================
 def build_generic_model(model_type, **kwargs):
     if model_type == "LSTM":
@@ -540,36 +723,104 @@ def build_generic_model(model_type, **kwargs):
         return build_gru(**kwargs)
     if model_type == "CNN_LSTM":
         return build_cnn_lstm(**kwargs)
+    if model_type == "BI_LSTM":
+        return build_bilstm(**kwargs)
     raise ValueError(f"Unknown model_type: {model_type}")
 
 
 # =====================================================
-# 3. PARAMETER SPACE
+# 3. PARAMETER GRID
 # =====================================================
-smote_param_grid = [
-    {'k_neighbors': 5, 'sampling_strategy': 'auto', 'random_state': 42},
-]
-
 model_param_grid = [
-    {'model_type': 'LSTM', 'units': (128, 64), 'dropout': 0.3, 'learning_rate': 7e-4},
-    {'model_type': 'GRU', 'units': (128, 64), 'dropout': 0.3, 'learning_rate': 7e-4},
-    {'model_type': 'CNN_LSTM', 'filters': 64, 'kernel_size': 3, 'lstm_units': 64, 'dropout': 0.3, 'learning_rate': 1e-3},
+    {
+        'model_type': 'CNN_LSTM',
+        'filters': 96,
+        'kernel_size': 5,
+        'lstm_units': 96,
+        'dense_units': (128,),
+        'dropout': 0.3,
+        'recurrent_dropout': 0.1,
+        'learning_rate': 7e-4,
+        'bidirectional': True
+    },
+    {
+        'model_type': 'CNN_LSTM',
+        'filters': 64,
+        'kernel_size': 3,
+        'lstm_units': 128,
+        'dense_units': (64,),
+        'dropout': 0.25,
+        'recurrent_dropout': 0.15,
+        'learning_rate': 6e-4,
+        'bidirectional': True
+    },
+    {
+        'model_type': 'CNN_LSTM',
+        'filters': 128,
+        'kernel_size': 3,
+        'lstm_units': 64,
+        'dense_units': (128,),
+        'dropout': 0.35,
+        'recurrent_dropout': 0.1,
+        'learning_rate': 5e-4,
+        'bidirectional': False
+    },
+    {
+        'model_type': 'CNN_LSTM',
+        'filters': 96,
+        'kernel_size': 7,
+        'lstm_units': 96,
+        'dense_units': (128,),
+        'dropout': 0.3,
+        'learning_rate': 8e-4,
+        'bidirectional': False
+    },
+    {
+        'model_type': 'CNN_LSTM',
+        'filters': 80,
+        'kernel_size': 3,
+        'lstm_units': 80,
+        'dense_units': (128, 64),
+        'dropout': 0.3,
+        'recurrent_dropout': 0.1,
+        'learning_rate': 9e-4,
+        'bidirectional': True,
+        'use_noise': True,
+        'use_layernorm': True
+    },
 ]
 
-training_params = {'epochs': 50, 'batch_size': 32}
+training_params = {'epochs': 60, 'batch_size': 1024}
+balanced_class_weights = compute_balanced_class_weights(y_train_base)
 
 
 # =====================================================
-# 4. EXPERIMENT FUNCTION (wrapper)
+# Helper: progress bar for joblib
 # =====================================================
-def run_single_experiment(smote_params, model_params):
-    smote_params_local = smote_params.copy()
+@contextmanager
+def tqdm_joblib(tqdm_object):
+    class TqdmBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
+        def __call__(self, *args, **kwargs):
+            tqdm_object.update(n=self.batch_size)
+            return super().__call__(*args, **kwargs)
+    original_callback = joblib.parallel.BatchCompletionCallBack
+    joblib.parallel.BatchCompletionCallBack = TqdmBatchCompletionCallback
+    try:
+        yield tqdm_object
+    finally:
+        joblib.parallel.BatchCompletionCallBack = original_callback
+        tqdm_object.close()
+
+
+# =====================================================
+# 4. EXPERIMENT FUNCTION (improved)
+# =====================================================
+def run_single_experiment(model_params):
+    # --- copia parametri locali ---
     model_params_local = model_params.copy()
     model_type = model_params_local.pop("model_type")
     learning_rate = model_params_local.pop("learning_rate", 1e-3)
     dropout = model_params_local.pop("dropout", 0.3)
-
-    X_resampled, y_resampled = apply_smote_resampling(X_train_base, y_train_base, smote_params_local)
 
     build_args = dict(
         sequence_length=sequence_length,
@@ -577,6 +828,7 @@ def run_single_experiment(smote_params, model_params):
         n_classes=n_classes
     )
 
+    # --- costruzione del modello dinamica ---
     model = build_generic_model(
         model_type,
         **build_args,
@@ -584,40 +836,56 @@ def run_single_experiment(smote_params, model_params):
         **model_params_local
     )
 
-    model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
-        loss='sparse_categorical_crossentropy',
-        metrics=['accuracy', F1Score(num_classes=n_classes)]
+    print(f"\n🧩 Training {model_type} | Params:")
+    for k, v in model_params_local.items():
+        print(f"   {k}: {v}")
+
+    # --- ottimizzatore con clip gradiente (evita esplosioni LSTM) ---
+    optimizer = keras.optimizers.Adam(
+        learning_rate=learning_rate,
+        clipnorm=1.0
     )
 
+    # --- loss e metriche ---
+    model.compile(
+        optimizer=optimizer,
+        loss='sparse_categorical_crossentropy',
+        metrics=[
+            'accuracy',
+            F1Score(num_classes=n_classes, average='macro', name='val_f1_score')
+        ]
+    )
+
+    # --- addestramento ---
     history = model.fit(
-        X_resampled, y_resampled,
+        X_train_base, y_train_base,
         validation_data=(X_val_seq, y_val_enc),
         epochs=training_params['epochs'],
         batch_size=training_params['batch_size'],
-        callbacks=create_callbacks(),
-        verbose=0
+        callbacks=create_callbacks() + [
+            keras.callbacks.TerminateOnNaN()
+        ],
+        class_weight=balanced_class_weights,
+        verbose=1
     )
 
+    # --- valutazione finale ---
     val_pred_probs = model.predict(X_val_seq, verbose=0)
     y_pred = np.argmax(val_pred_probs, axis=1)
+
     f1_macro = f1_score(y_val_enc, y_pred, average='macro')
     acc = np.mean(y_val_enc == y_pred)
 
+    # --- tracking delle metriche ---
     history_dict = history.history
     val_f1_history = history_dict.get('val_f1_score')
     best_epoch = int(np.argmax(val_f1_history)) if val_f1_history is not None else None
     best_val_f1 = float(max(val_f1_history)) if val_f1_history is not None else None
 
-    model_config = {**model_params_local}
-    model_config['model_type'] = model_type
-    model_config['dropout'] = dropout
-    model_config['learning_rate'] = learning_rate
-
+    # --- log risultato ---
     result = {
         'model_type': model_type,
-        'model_config': model_config,
-        'smote_params': smote_params_local,
+        'model_config': {**model_params_local, 'dropout': dropout, 'learning_rate': learning_rate},
         'val_f1_macro': f1_macro,
         'val_accuracy': acc,
         'val_pred_probs': val_pred_probs.astype(np.float32),
@@ -626,77 +894,150 @@ def run_single_experiment(smote_params, model_params):
         'val_f1_keras_best': best_val_f1
     }
 
+    # --- pulizia memoria ---
     tf.keras.backend.clear_session()
     del model
-
     return result
 
 
 # =====================================================
 # 5. PARALLEL GRID SEARCH
 # =====================================================
-grid_results = Parallel(n_jobs=-1)(
-    delayed(run_single_experiment)(s, m)
-    for s, m in tqdm(
-        product(smote_param_grid, model_param_grid),
-        total=len(smote_param_grid) * len(model_param_grid),
-        desc="Training models"
+total_jobs = len(model_param_grid)
+with tqdm_joblib(tqdm(total=total_jobs, desc="Training models", unit="model")):
+    grid_results = Parallel(n_jobs=-1)(
+        delayed(run_single_experiment)(m) for m in model_param_grid
     )
-)
 
 
 # =====================================================
-# 6. ENSEMBLE (Weighted Voting)
+# 6. ENSEMBLE (Weighted Voting) — Improved
 # =====================================================
 print("\n🧠 Creating ensemble predictions (weighted voting)...")
+
 preds = []
 weights = []
+model_scores = []
 
 for res in grid_results:
-    pred_probs = res['val_pred_probs']
-    preds.append(pred_probs)
-    weights.append(max(res['val_f1_macro'], 1e-6))
+    pred_probs = res.get('val_pred_probs')
+    f1_val = res.get('val_f1_macro', 0.0)
 
+    if pred_probs is None or np.isnan(f1_val):
+        continue
+
+    preds.append(pred_probs)
+    weights.append(max(f1_val, 1e-6))  # evita divisione per 0
+    model_scores.append(f1_val)
+
+# --- sicurezza ---
+if len(preds) == 0:
+    raise RuntimeError("❌ Nessuna predizione valida trovata per l'ensemble.")
+
+# --- normalizza pesi ---
+weights = np.array(weights)
+weights = weights / np.sum(weights)
+
+# --- ensemble pesato ---
 ensemble_pred = np.average(preds, axis=0, weights=weights)
 ensemble_classes = np.argmax(ensemble_pred, axis=1)
 
+# --- metriche ensemble ---
 ensemble_f1 = f1_score(y_val_enc, ensemble_classes, average='macro')
 ensemble_acc = np.mean(ensemble_classes == y_val_enc)
 
+# --- statistiche sui modelli singoli ---
+mean_f1 = np.mean(model_scores)
+std_f1 = np.std(model_scores)
+top3_f1 = sorted(model_scores, reverse=True)[:3]
+
+# --- risultati ---
+print("\n📊 ENSEMBLE SUMMARY")
+print(f"Weighted voting using {len(preds)} models")
+print(f"→ Mean F1 (single models): {mean_f1:.4f} ± {std_f1:.4f}")
+print(f"→ Top 3 F1 individual: {top3_f1}")
+print(f"\n🥇 ENSEMBLE PERFORMANCE")
+print(f"F1-macro (ensemble): {ensemble_f1:.4f}")
+print(f"Accuracy (ensemble): {ensemble_acc:.4f}")
+
+# --- salva risultati intermedi ---
+ensemble_results = {
+    "ensemble_f1": ensemble_f1,
+    "ensemble_acc": ensemble_acc,
+    "model_scores": model_scores,
+    "weights": weights.tolist(),
+    "preds_shape": [p.shape for p in preds]
+}
+
 
 # =====================================================
-# 7. RESULTS SUMMARY
+# 7. RESULTS SUMMARY — Improved reporting
 # =====================================================
+
+# --- Crea tabella con risultati principali ---
 grid_results_df = pd.DataFrame([
     {
-        'model_type': r['model_type'],
-        'val_f1_macro': r['val_f1_macro'],
-        'val_accuracy': r['val_accuracy'],
+        'model_type': r.get('model_type', '?'),
+        'val_f1_macro': r.get('val_f1_macro', 0),
+        'val_accuracy': r.get('val_accuracy', 0),
+        'epochs_trained': r.get('epochs_trained', 0),
+        'best_epoch': r.get('best_epoch', None),
+        **{f"param_{k}": v for k, v in r.get('model_config', {}).items()}
     }
     for r in grid_results
 ])
 
-print("\n📊 Individual model results:")
-display(grid_results_df.sort_values('val_f1_macro', ascending=False))
+# --- Ordina per F1 macro ---
+grid_results_df = grid_results_df.sort_values('val_f1_macro', ascending=False).reset_index(drop=True)
 
-print("\n🥇 ENSEMBLE PERFORMANCE")
-print(f"F1-macro (ensemble): {ensemble_f1:.4f}")
-print(f"Accuracy (ensemble): {ensemble_acc:.4f}")
+# --- Mostra top risultati ---
+print("\n📊 INDIVIDUAL MODEL RESULTS (sorted by F1)")
+display(grid_results_df.head(10))
 
-best_single_result_raw = max(grid_results, key=lambda r: r['val_f1_macro'])
+# --- Statistiche globali ---
+mean_f1 = grid_results_df['val_f1_macro'].mean()
+std_f1 = grid_results_df['val_f1_macro'].std()
+best_f1 = grid_results_df['val_f1_macro'].max()
+best_acc = grid_results_df.loc[0, 'val_accuracy']
+
+print(f"\n📈 Mean F1 across all models: {mean_f1:.4f} ± {std_f1:.4f}")
+print(f"🏆 Best F1: {best_f1:.4f} | Best Accuracy: {best_acc:.4f}")
+print(f"🧠 Ensemble F1: {ensemble_f1:.4f} | Ensemble Acc: {ensemble_acc:.4f}")
+
+# --- Mostra il miglior modello completo ---
+best_single_result_raw = max(grid_results, key=lambda r: r.get('val_f1_macro', 0))
 best_single_result = best_single_result_raw.copy()
 best_single_result.pop('val_pred_probs', None)
-best_model_config = best_single_result['model_config'].copy()
-best_smote_params = best_single_result['smote_params'].copy()
+best_model_config = best_single_result.get('model_config', {}).copy()
 
-print("\n🏆 Best single model:")
-print(
-    f"Type: {best_single_result['model_type']} | "
-    f"Macro F1: {best_single_result['val_f1_macro']:.4f} | "
-    f"Accuracy: {best_single_result['val_accuracy']:.4f}"
-)
-print(f"Hyperparameters: {best_model_config}")
-print(f"SMOTE params: {best_smote_params}")
+print("\n🥇 BEST SINGLE MODEL DETAILS")
+print(f"Type: {best_single_result.get('model_type')}")
+print(f"Macro F1: {best_single_result.get('val_f1_macro'):.4f}")
+print(f"Accuracy: {best_single_result.get('val_accuracy'):.4f}")
+print(f"Epochs Trained: {best_single_result.get('epochs_trained')}")
+print(f"Best Epoch: {best_single_result.get('best_epoch')}")
+print("Hyperparameters:")
+for k, v in best_model_config.items():
+    print(f"  • {k}: {v}")
+
+# --- Salva risultati se serve ---
+results_summary = {
+    "ensemble_f1": ensemble_f1,
+    "ensemble_acc": ensemble_acc,
+    "mean_f1": mean_f1,
+    "std_f1": std_f1,
+    "best_model": best_model_config,
+    "grid_df": grid_results_df
+}
+
+# Esempio: salva i risultati in CSV
+grid_results_df.to_csv("grid_results_summary.csv", index=False)
+print("\n💾 Results saved to 'grid_results_summary.csv'")
+
+# %% [markdown]
+# ## 6. Rifinitura del modello migliore
+# 
+# Rialleniamo la migliore configurazione per più epoche e ne misuriamo le metriche di validazione.
 
 # %%
 # Retrain best configuration to capture full artifacts
@@ -706,8 +1047,7 @@ if 'best_single_result' not in globals():
 
 refit_epochs = 80
 best_model_config = best_single_result['model_config'].copy()
-best_smote_params = best_single_result['smote_params'].copy()
-best_model_type = best_model_config.pop('model_type')
+best_model_type = best_model_config.pop('model_type') 
 best_learning_rate = best_model_config.pop('learning_rate', 1e-3)
 best_dropout = best_model_config.pop('dropout', 0.3)
 best_model_summary = {
@@ -718,14 +1058,7 @@ best_model_summary = {
 }
 print(f"Configurazione selezionata: {best_model_summary}")
 
-# Applica SMOTE alla configurazione migliore
-X_resampled_best, y_resampled_best = apply_smote_resampling(
-    X_train_base,
-    y_train_base,
-    best_smote_params
- )
-
-# Costruisci e allena nuovamente il modello con più epoche
+# Costruisci e riallena il modello con più epoche
 best_model = build_generic_model(
     best_model_type,
     sequence_length=sequence_length,
@@ -741,33 +1074,33 @@ best_model.compile(
  )
 
 best_history_obj = best_model.fit(
-    X_resampled_best,
-    y_resampled_best,
+    X_train_base,
+    y_train_base,
     validation_data=(X_val_seq, y_val_enc),
     epochs=refit_epochs,
     batch_size=training_params['batch_size'],
     callbacks=create_callbacks(),
+    class_weight=balanced_class_weights,
     verbose=0
  )
 best_history = best_history_obj.history
 
 # Calcola metriche sulla validation
 y_val_pred = np.argmax(best_model.predict(X_val_seq, verbose=0), axis=1)
-best_f1_per_class = f1_score(y_val_enc, y_val_pred, average=None)
 val_f1_macro = f1_score(y_val_enc, y_val_pred, average='macro')
 val_f1_weighted = f1_score(y_val_enc, y_val_pred, average='weighted')
 val_accuracy = np.mean(y_val_pred == y_val_enc)
-best_val_metrics = {
-    'macro_f1': val_f1_macro,
-    'weighted_f1': val_f1_weighted,
-    'accuracy': val_accuracy
-}
 
 print(
     f"Macro F1: {val_f1_macro:.4f} | "
     f"Weighted F1: {val_f1_weighted:.4f} | "
     f"Accuracy: {val_accuracy:.4f}"
 )
+
+# %% [markdown]
+# ### Andamento dell'addestramento
+# 
+# Tracciamo loss, accuracy e F1 per monitorare il comportamento del modello rifinito.
 
 # %%
 # Visualize training history of the best configuration
@@ -812,6 +1145,11 @@ print(f"Validation Loss: {best_history['val_loss'][-1]:.4f}")
 print(f"Validation Accuracy: {best_history['val_accuracy'][-1]:.4f}")
 print(f"Validation F1: {best_history['val_f1_score'][-1]:.4f}")
 
+# %% [markdown]
+# ### Valutazione su validation
+# 
+# Calcoliamo metriche di classificazione e report completo sul validation set.
+
 # %%
 # Make predictions on validation set with the best model
 print("🔮 Evaluating best model on validation set...\n")
@@ -843,6 +1181,11 @@ print(classification_report(y_val_enc, y_pred_classes,
 accuracy = np.mean(y_pred_classes == y_val_enc)
 print(f"\n✨ Overall Validation Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
 
+# %% [markdown]
+# ### Confusion matrix e analisi errori
+# 
+# Ispezioniamo il dettaglio delle predizioni per classe per individuare pattern di errore.
+
 # %%
 # Confusion matrix
 cm = confusion_matrix(y_val_enc, y_pred_classes)
@@ -864,6 +1207,11 @@ for i, label in enumerate(label_encoder.classes_):
     print(f"  Correct: {correct}/{total} ({correct/total*100:.1f}%)")
     print(f"  Misclassified: {total-correct}")
 
+# %% [markdown]
+# ## 7. Preparazione del test set
+# 
+# Carichiamo i dati di test e ne verifichiamo struttura e campioni principali.
+
 # %%
 # Load test data
 print("📂 Loading test data...")
@@ -874,49 +1222,66 @@ print(f"Number of test samples: {X_test['sample_index'].nunique()}")
 print("\n📊 First few rows:")
 display(X_test.head())
 
-# %%
-# Prepare test sequences
-print("\n🔄 Preparing test sequences...")
+# %% [markdown]
+# ### Generazione delle finestre di test
+# 
+# Applichiamo lo stesso preprocessing su ciascun campione del test set.
 
-test_samples = []
-test_sample_indices = []
+# %%
+# Prepare test windows
+print("\n🔄 Preparing test windows...")
+
+test_windows = []
+test_window_sample_indices = []
 
 unique_test_samples = X_test['sample_index'].unique()
 
 for sample_idx in unique_test_samples:
-    # Get all time steps for this sample
     sample_data = X_test[X_test['sample_index'] == sample_idx].copy()
-    sample_data = sample_data.sort_values('time')
-    
-    # Preprocess and scale features using the training scaler
-    features = preprocess_features(sample_data)
-    features_scaled = scaler.transform(features)
-    test_samples.append(features_scaled.astype(np.float32))
-    test_sample_indices.append(sample_idx)
+    processed = preprocess_sample(sample_data)
+    sample_windows = create_windows(processed, window_size=WINDOW_SIZE, stride=WINDOW_STRIDE)
+    for window in sample_windows:
+        test_windows.append(window.astype(np.float32))
+        test_window_sample_indices.append(sample_idx)
 
-print(f"✅ Created {len(test_samples)} test sequences")
+if not test_windows:
+    raise ValueError("Nessuna finestra generata dal set di test.")
 
-# Pad or truncate to match the training sequence length
-X_test_seq = np.zeros((len(test_samples), sequence_length, n_features), dtype=np.float32)
-for i, sample in enumerate(test_samples):
-    seq_len = sample.shape[0]
-    if seq_len >= sequence_length:
-        X_test_seq[i] = sample[:sequence_length]
-    else:
-        X_test_seq[i, :seq_len, :] = sample
-        # Remaining timesteps stay zero-padded
+test_windows_array = np.stack(test_windows).astype(np.float32)
+test_windows_flat = test_windows_array.reshape(-1, n_features)
+test_windows_scaled = scaler.transform(test_windows_flat).reshape(-1, WINDOW_SIZE, n_features).astype(np.float32)
 
-print(f"✅ Test tensor shape: {X_test_seq.shape}")
+print(f"✅ Created {len(test_windows_scaled)} test windows from {len(unique_test_samples)} samples")
+print(f"   Window shape: {test_windows_scaled.shape[1:]}")
+print(f"   Unique sample indices: {len(set(test_window_sample_indices))}")
+
+# %% [markdown]
+# ### Predizione aggregata sul test
+# 
+# Otteniamo le probabilità per finestra, le aggreghiamo a livello di campione e analizziamo la distribuzione finale.
 
 # %%
 # Make predictions
 print("\n🔮 Generating predictions...")
 
-y_test_probs = best_model.predict(X_test_seq)
-y_test_classes = np.argmax(y_test_probs, axis=1)
+window_probs = best_model.predict(test_windows_scaled)
+
+sample_probabilities = defaultdict(list)
+for prob, sample_idx in zip(window_probs, test_window_sample_indices):
+    sample_probabilities[sample_idx].append(prob)
+
+aggregated_indices = []
+aggregated_probs = []
+for sample_idx in unique_test_samples:
+    probs = np.stack(sample_probabilities[sample_idx])
+    aggregated_indices.append(sample_idx)
+    aggregated_probs.append(probs.mean(axis=0))
+
+aggregated_probs = np.stack(aggregated_probs)
+y_test_classes = np.argmax(aggregated_probs, axis=1)
 y_test_labels = label_encoder.inverse_transform(y_test_classes)
 
-print(f"✅ Generated {len(y_test_labels)} predictions")
+print(f"✅ Generated predictions for {len(y_test_labels)} samples")
 
 # Show prediction distribution
 pred_dist = pd.Series(y_test_labels).value_counts()
@@ -935,29 +1300,20 @@ plt.grid(axis='y', alpha=0.3)
 plt.tight_layout()
 plt.show()
 
+# %% [markdown]
+# ### Esportazione della submission
+# 
+# Formattiamo gli indici e salviamo il file `submission.csv` conforme alle specifiche della competizione.
+
 # %%
-# Create submission
-print("📝 Creating submission file...\n")
-
-# Format sample indices as zero-padded 3-digit strings
-formatted_indices = [f"{int(idx):03d}" for idx in test_sample_indices]
-
-submission = pd.DataFrame({
+# Save submission
+formatted_indices = [f"{int(idx):03d}" for idx in aggregated_indices]
+submission_df = pd.DataFrame({
     'sample_index': formatted_indices,
     'label': y_test_labels
-})
-
-# Save as comma-separated file
-submission_path = 'submission.csv'
-submission.to_csv(submission_path, index=False)
-
-print("✅ Submission file created: submission.csv")
-print(f"   Format: Comma-separated (CSV)")
-print(f"   Rows: {len(submission)}")
-print(f"\n📋 First 15 predictions:")
-print("=" * 40)
-display(submission.head(15))
-
-print("\n✨ Submission ready for upload!")
+}).sort_values('sample_index').reset_index(drop=True)
+submission_path = os.path.join(os.getcwd(), 'submission.csv')
+submission_df.to_csv(submission_path, index=False)
+print(f"✅ Submission saved to {submission_path}")
 
 
