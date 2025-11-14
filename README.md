@@ -1,23 +1,29 @@
 # challenge_an2dl
 Challenge AN2DL - Pain Classification
 
-## 🎯 Ensemble Approach (RECOMMENDED)
+## 🎯 Ensemble con Optuna (RECOMMENDED)
 
-Per ottenere i migliori risultati, usa l'ensemble di 9 modelli:
+Per ottenere i migliori risultati, usa l'ensemble automatico con Optuna:
 
-**File**: `pain_pirate_ensemble_complete.ipynb`
+**File**: `pain_pirate_optuna_ensemble.ipynb`
 
 Questo notebook contiene:
-- ✅ Tutto il codice in un unico file
-- ✅ Ensemble di 9 modelli Conv1D + BiLSTM
-- ✅ EWA weighting basato su validation F1
-- ✅ Predizioni con soft voting pesato
+- ✅ **Optuna optimization** per trovare automaticamente i migliori iperparametri
+- ✅ **Selezione automatica** dei migliori N modelli dai trial di Optuna
+- ✅ **Ensemble** dei modelli selezionati con EWA weighting
+- ✅ Pipeline completamente automatizzata in un unico file
 
 ### Quick Start
 1. Assicurati di avere i file dati: `pirate_pain_train.csv`, `pirate_pain_train_labels.csv`, `pirate_pain_test.csv`
-2. Apri `pain_pirate_ensemble_complete.ipynb`
+2. Apri `pain_pirate_optuna_ensemble.ipynb`
 3. Esegui tutte le celle (`Run All`)
-4. Ottieni `submission_ensemble_9models.csv`
+4. Ottieni `submission_optuna_ensemble.csv`
+
+### Vantaggi
+- 🔍 Optuna trova automaticamente i migliori iperparametri (es. 300 trial)
+- 🎯 Ensemble usa automaticamente i top N modelli migliori
+- ⚖️ EWA pesa i modelli basandosi sulle performance
+- 🚀 Non servono configurazioni manuali
 
 Vedi `README_ENSEMBLE.md` per dettagli completi.
 
