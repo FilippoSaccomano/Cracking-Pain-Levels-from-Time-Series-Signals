@@ -49,4 +49,4 @@ Then open and run any notebook from top to bottom.
 ## Notes
 
 - The notebooks are exploratory/experimental pipelines and include preprocessing, model training, and evaluation in one place.
-- `environment.yml` was generated on Apple Silicon and includes `tensorflow-macos` / `tensorflow-metal`, while notebooks primarily use **PyTorch**.
+- `environment.yml` was exported from the original team environment (Apple Silicon) and includes `tensorflow-macos` / `tensorflow-metal`; the notebooks in this repository primarily use **PyTorch**.
